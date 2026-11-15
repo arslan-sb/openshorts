@@ -52,3 +52,9 @@ CLAUDE.local.md
 
 # Rust build output
 osrender/target/
+
+# Campaign tools (campaign.py): your posting ledger and prepared clips stay local
+campaigns/ledger.json
+campaign_out/
+# CUDA compute cache: the local compose sets HOME=/app (the repo)
+.nv/

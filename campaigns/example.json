@@ -1,0 +1,22 @@
+{
+  "name": "Example Podcast Clipping",
+  "brief_url": "https://contentrewards.com/c/discover",
+  "rate_per_1k": 1.5,
+  "max_payout_per_clip": 300,
+  "platforms": ["tiktok", "youtube", "instagram"],
+  "min_seconds": 15,
+  "max_seconds": 60,
+  "required_mentions": ["@examplecreator"],
+  "hashtags": ["#podcast", "#clips"],
+  "disclosure": {"text": "Paid partnership", "seconds": 3, "position": "top"},
+  "audio": "original",
+  "banned_words": ["crypto giveaway"],
+  "one_account_per_clip": true,
+  "submit_within_minutes": 30,
+  "analytics_recording_after_views": 1000,
+  "checklist": [
+    "No copyrighted music added on top",
+    "Hook is readable in the first 2 seconds",
+    "Clip makes sense without the rest of the episode"
+  ]
+}

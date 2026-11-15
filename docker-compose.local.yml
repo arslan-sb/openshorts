@@ -1,0 +1,42 @@
+# Fully-local override: no Google key, no cloud calls in the clip pipeline.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+#
+# The moment picker talks to Ollama running on the host (local/start-ollama.sh),
+# which uses the GPU directly. The backend container itself runs the CPU image:
+# Docker on this machine has no NVIDIA runtime. See local/README.md to switch
+# the container to the GPU image once nvidia-container-toolkit is installed.
+services:
+  backend:
+    # Run as your own user: the repo is bind-mounted at /app, and the image's
+    # appuser (uid 999) cannot write to a folder you own. Override with
+    # LOCAL_UID/LOCAL_GID if your ids are not 1000.
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Caches land in the repo's git-ignored .cache/ instead of image paths
+      # that only appuser can write.
+      HOME: /app
+      HF_HOME: /app/.cache/huggingface
+      YOLO_CONFIG_DIR: /app/.cache/Ultralytics
+      TORCHINDUCTOR_CACHE_DIR: /app/.cache/torchinductor
+      # Your uid has no /etc/passwd entry in the image; getpass.getuser()
+      # (torch reads it at import) falls back to these instead of crashing.
+      USER: clipper
+      LOGNAME: clipper
+      LLM_PROVIDER: openai
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:14b}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-900}
+      # CPU transcription: "small" is a good speed/accuracy balance on 16 cores.
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE: int8
+      # Fewer parallel renders and one job at a time: this box has 16 GB RAM
+      # shared with Ollama.
+      CLIP_WORKERS: ${CLIP_WORKERS:-2}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-1}
