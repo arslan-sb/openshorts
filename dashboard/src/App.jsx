@@ -924,7 +924,11 @@ function App() {
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
   const geminiOk = !!apiKey || !!localLlm;
-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
+  // Upload-Post only publishes clips, and the publish buttons check for it
+  // themselves (ResultCard canPost, ThumbnailStudio). A fully-local server
+  // makes clips without it, so it does not gate generation there.
+  const uploadPostOk = !!uploadPostKey || !!localLlm;
+  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostOk);
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
@@ -1646,7 +1650,7 @@ function App() {
               >
                 <AlertTriangle size={12} />
                 <span className="hidden md:inline">
-                  {!geminiOk && !uploadPostKey
+                  {!geminiOk && !uploadPostOk
                     ? 'Gemini & Upload-Post keys missing'
                     : !geminiOk
                       ? 'Gemini API Key Missing'
@@ -1666,7 +1670,7 @@ function App() {
               <div className="min-w-0">
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
                 <span className="text-muted">
-                  {!geminiOk && !uploadPostKey
+                  {!geminiOk && !uploadPostOk
                     ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
                     : !geminiOk
                       ? 'Set your Gemini API key to use OpenShorts.'
@@ -2578,7 +2582,7 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title={!geminiOk && !uploadPostKey
+        title={!geminiOk && !uploadPostOk
           ? 'Required API Keys Missing'
           : !geminiOk
             ? 'Gemini API Key Required'
