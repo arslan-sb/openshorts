@@ -1997,8 +1997,11 @@ def transcribe_video(video_path):
 
     return transcript
 
-def _run_gemini_stage(client, model_name, prompt, schema):
+def _run_gemini_stage(client, model_name, prompt, schema, detail=False):
     """One schema-enforced model call with transient-error backoff.
+
+    ``detail`` selects the OpenAI-compatible backend's detail-pass sampling
+    (warmer, its own reasoning effort; see llm_backend); Gemini ignores it.
     Returns (parsed_dict, cost_analysis).
 
     With an OpenAI-compatible server configured (``llm_backend.active()``)
@@ -2015,7 +2018,8 @@ def _run_gemini_stage(client, model_name, prompt, schema):
     for attempt in range(1, max_attempts + 1):
         try:
             if use_local:
-                return llm_backend.generate_json(prompt, schema, model=model_name)
+                return llm_backend.generate_json(prompt, schema, model=model_name,
+                                                 detail=detail)
             response = client.models.generate_content(model=model_name, contents=prompt, config=config)
             # Policy blocks are deterministic — retrying only burns quota and
             # time, and the user deserves the real reason instead of a generic
@@ -2053,7 +2057,8 @@ def _run_gemini_stage(client, model_name, prompt, schema):
             time.sleep(wait)
 
 
-def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs, label):
+def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs, label,
+                     detail=False):
     """Run a Gemini stage over ``items``; on a policy block, bisect.
 
     Google's prompt filter (PROHIBITED_CONTENT) fires on some COMBINATIONS of
@@ -2067,7 +2072,8 @@ def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs
         return []
     prompt = build_prompt(items)
     try:
-        parsed, cost = _run_gemini_stage(client, model_name, prompt, schema)
+        parsed, cost = _run_gemini_stage(client, model_name, prompt, schema,
+                                         detail=detail)
         if cost:
             costs.append(cost)
         return list(parsed.get(key) or [])
@@ -2077,8 +2083,10 @@ def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs
             return []
         mid = len(items) // 2
         print(f"   🚫 {label}: Gemini blocked a batch of {len(items)}; retrying as {mid} + {len(items) - mid}")
-        return (_run_stage_split(client, model_name, items[:mid], build_prompt, schema, key, costs, label)
-                + _run_stage_split(client, model_name, items[mid:], build_prompt, schema, key, costs, label))
+        return (_run_stage_split(client, model_name, items[:mid], build_prompt, schema, key,
+                                 costs, label, detail=detail)
+                + _run_stage_split(client, model_name, items[mid:], build_prompt, schema, key,
+                                   costs, label, detail=detail))
 
 
 def score_batch_size():
@@ -2208,9 +2216,12 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
                     windows_json=json.dumps(_payload(ws), ensure_ascii=False))
             return build
 
+        # Copywriting: a local model samples it warmer and with its own
+        # reasoning effort (llm_backend, detail=True); Gemini ignores it.
         shorts = _run_stage_split(client, model_name, shortlist,
                                   _detail_prompt_for(min_clips, max_clips),
-                                  gemini_worker.DetailResponse, "shorts", costs, "detail")
+                                  gemini_worker.DetailResponse, "shorts", costs, "detail",
+                                  detail=True)
 
         # The floor lived only in the prompt, and a prompt is not a contract:
         # the model regularly returned half of it and the job shipped that.
@@ -2228,7 +2239,8 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
                 extra = _run_stage_split(
                     client, model_name, spare,
                     _detail_prompt_for(missing, max(missing, len(spare))),
-                    gemini_worker.DetailResponse, "shorts", costs, "detail-floor")
+                    gemini_worker.DetailResponse, "shorts", costs, "detail-floor",
+                    detail=True)
                 if extra:
                     shorts = sorted(shorts + extra,
                                     key=lambda s: float(s.get("start") or 0))

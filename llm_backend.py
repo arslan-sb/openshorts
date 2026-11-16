@@ -57,6 +57,68 @@ def active() -> bool:
     return provider() == "openai" and bool(base_url())
 
 
+DEFAULT_TEMPERATURE = 0.2         # scoring: ranks windows, numbers in strict JSON
+DEFAULT_DETAIL_TEMPERATURE = 0.7  # detail: writes the hook, title and captions
+
+
+def _temperature_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return min(max(value, 0.0), 2.0)
+
+
+def scoring_temperature() -> float:
+    """Sampling temperature for the scoring pass (``LLM_TEMPERATURE``)."""
+    return _temperature_env("LLM_TEMPERATURE", DEFAULT_TEMPERATURE)
+
+
+def detail_temperature() -> float:
+    """Sampling temperature for the detail pass (``LLM_DETAIL_TEMPERATURE``).
+
+    The detail pass is copywriting. At the scoring pass's 0.2 a local model
+    plays safe and copies the prompt's example hooks word for word ("Stop
+    doing this. Seriously." on a clip about an outage), so it runs warmer.
+    """
+    return _temperature_env("LLM_DETAIL_TEMPERATURE", DEFAULT_DETAIL_TEMPERATURE)
+
+
+REASONING_EFFORTS = ("none", "low", "medium", "high")
+
+
+def _effort_env(name: str) -> Optional[str]:
+    value = (os.environ.get(name) or "").strip().lower()
+    return value if value in REASONING_EFFORTS else None
+
+
+def reasoning_effort() -> Optional[str]:
+    """Scoring pass ``reasoning_effort`` (``LLM_REASONING_EFFORT``); None = not sent.
+
+    Thinking models (Gemma 4, Qwen 3.x, gpt-oss) reason before answering by
+    default. On a scoring call Gemma 4 12B wrote 5-10k characters of hidden
+    reasoning (25-48 s) and sometimes ran on until the answer came back empty;
+    with "none" the same call took 4-5 s. gpt-oss cannot switch it off and
+    treats "none" as its lowest level.
+    """
+    return _effort_env("LLM_REASONING_EFFORT")
+
+
+def detail_reasoning_effort() -> Optional[str]:
+    """Detail pass ``reasoning_effort`` (``LLM_DETAIL_REASONING_EFFORT``).
+
+    Kept separate because thinking is worth it here: with it off, Gemma 4 12B
+    wrote vaguer hooks ("This is actually insane.") than with it on ("The
+    scandal that ended Jensen's 33-year reign"), and the detail pass is one or
+    two calls per job where scoring is many.
+    """
+    return _effort_env("LLM_DETAIL_REASONING_EFFORT")
+
+
+def _is_reasoning_rejection(resp: httpx.Response) -> bool:
+    return resp.status_code in (400, 422) and "reasoning" in resp.text.lower()
+
+
 def describe() -> Optional[dict]:
     """What ``/api/config`` tells the dashboard, or ``None`` when inactive."""
     if not active():
@@ -100,8 +162,12 @@ def _is_format_rejection(resp: httpx.Response) -> bool:
 
 
 def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = None,
-                  ) -> Tuple[dict, Optional[dict]]:
+                  temperature: Optional[float] = None,
+                  detail: bool = False) -> Tuple[dict, Optional[dict]]:
     """One chat completion that must come back as JSON matching ``schema``.
+
+    ``detail`` selects the detail pass's sampling (warmer, its own reasoning
+    effort) over the scoring pass's; ``temperature`` overrides either.
 
     Returns ``(parsed_dict, cost_analysis)`` in the exact shape
     ``main._run_gemini_stage`` returns, so the caller does not branch on the
@@ -112,17 +178,29 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
 
     url = f"{base_url()}/chat/completions"
     model = model or model_name()
+    if temperature is None:
+        temperature = detail_temperature() if detail else scoring_temperature()
     messages = [
         {"role": "system", "content": "You answer with a single JSON object and nothing else."},
         {"role": "user", "content": prompt},
     ]
     last_rejection: Optional[str] = None
+    effort = detail_reasoning_effort() if detail else reasoning_effort()
     with _client() as client:
         for fmt in _response_formats(schema):
-            body = {"model": model, "messages": messages, "temperature": 0.2, "stream": False}
+            body = {"model": model, "messages": messages, "temperature": temperature,
+                    "stream": False}
             if fmt is not None:
                 body["response_format"] = fmt
+            if effort:
+                body["reasoning_effort"] = effort
             resp = client.post(url, json=body, headers=_headers())
+            if effort and _is_reasoning_rejection(resp):
+                # A server without the field: ask again without it, and do
+                # not send it for the looser formats either.
+                effort = None
+                body.pop("reasoning_effort")
+                resp = client.post(url, json=body, headers=_headers())
             if fmt is not None and _is_format_rejection(resp):
                 # The server does not know this response_format flavour; the
                 # next loop iteration asks for a looser one.

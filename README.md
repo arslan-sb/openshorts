@@ -463,6 +463,8 @@ lives in [`examples/n8n/`](examples/n8n/).
 | `LLM_MODEL` | Model name on that server (default `llama3.1:8b`) |
 | `LLM_API_KEY` | Bearer token for that server, if it checks one |
 | `LLM_SCORE_BATCH` | Transcript windows per scoring call (default 3 local, 8 Gemini) |
+| `LLM_TEMPERATURE` | Sampling temperature of the local scoring pass (default 0.2) |
+| `LLM_DETAIL_TEMPERATURE` | Sampling temperature of the local detail pass that writes hooks, titles and captions (default 0.7; at 0.2 local models copy the prompt's example hooks) |
 
 **Client-side (encrypted in localStorage):**
 | Key | Description |

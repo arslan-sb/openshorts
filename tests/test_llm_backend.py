@@ -127,7 +127,7 @@ def test_stage_routes_to_local_backend_and_retries_transient(local, monkeypatch)
     monkeypatch.setattr(main.time, "sleep", lambda *_: None)
     calls = {"n": 0}
 
-    def fake_generate(prompt, schema, model=None):
+    def fake_generate(prompt, schema, model=None, temperature=None, detail=False):
         calls["n"] += 1
         if calls["n"] == 1:
             raise httpx.ConnectError("ConnectError: connection refused")
@@ -149,3 +149,106 @@ def test_score_batch_shrinks_for_local_models(local, monkeypatch):
     monkeypatch.delenv("LLM_BASE_URL")
     monkeypatch.delenv("LLM_SCORE_BATCH")
     assert main.score_batch_size() == 8
+
+
+# --- temperature: scoring stays strict, copywriting runs warmer ------------
+
+def test_scoring_temperature_default_and_override(local, monkeypatch):
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    monkeypatch.delenv("LLM_TEMPERATURE", raising=False)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.4")
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse, temperature=0.9)
+    assert [b["temperature"] for b in bodies] == [0.2, 0.4, 0.9]
+
+
+@pytest.mark.parametrize("raw, expected", [("", 0.7), ("1.1", 1.1), ("abc", 0.7), ("5", 2.0)])
+def test_detail_temperature_env(monkeypatch, raw, expected):
+    monkeypatch.setenv("LLM_DETAIL_TEMPERATURE", raw)
+    assert llm_backend.detail_temperature() == expected
+
+
+def test_detail_flag_selects_detail_sampling(local, monkeypatch):
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    for name in ("LLM_TEMPERATURE", "LLM_DETAIL_TEMPERATURE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "none")
+    monkeypatch.delenv("LLM_DETAIL_REASONING_EFFORT", raising=False)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse, detail=True)
+    # Scoring: strict and without thinking. Detail: warmer, thinking left on.
+    assert (bodies[0]["temperature"], bodies[0].get("reasoning_effort")) == (0.2, "none")
+    assert (bodies[1]["temperature"], bodies[1].get("reasoning_effort")) == (0.7, None)
+
+
+def test_pipeline_marks_only_the_detail_calls(local, monkeypatch):
+    main = pytest.importorskip("main")
+    seen = []
+
+    def fake_generate(prompt, schema, model=None, temperature=None, detail=False):
+        seen.append((schema.__name__, detail))
+        if schema is gemini_worker.ScoreResponse:
+            return {"windows": [{"id": "window_001", "start": 0, "end": 60,
+                                 "score": 90, "reason": "r"}]}, None
+        return {"shorts": []}, None
+
+    monkeypatch.setattr(llm_backend, "generate_json", fake_generate)
+    transcript = {"language": "en", "segments": [
+        {"start": float(i * 5), "end": float(i * 5 + 5), "text": f"sentence {i}",
+         "words": [{"word": f" w{i}", "start": float(i * 5), "end": float(i * 5 + 1)}]}
+        for i in range(24)]}
+    main.get_viral_clips(transcript, 120.0)
+    assert {d for name, d in seen if name == "ScoreResponse"} == {False}
+    assert {d for name, d in seen if name == "DetailResponse"} == {True}
+
+
+# --- reasoning_effort: off unless asked, dropped when a server rejects it --
+
+def test_reasoning_effort_not_sent_by_default(local, monkeypatch):
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    monkeypatch.delenv("LLM_REASONING_EFFORT", raising=False)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "bogus")
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "NONE")
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert ["reasoning_effort" in b for b in bodies] == [False, False, True]
+    assert bodies[2]["reasoning_effort"] == "none"
+
+
+def test_reasoning_effort_dropped_when_rejected(local, monkeypatch):
+    bodies = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        bodies.append(body)
+        if "reasoning_effort" in body:
+            return httpx.Response(400, json={"error": {"message": "unknown field reasoning_effort"}})
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "none")
+    parsed, _ = llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert parsed == {"windows": []}
+    assert ["reasoning_effort" in b for b in bodies] == [True, False]
+    # The schema format was kept: only the unknown field was dropped.
+    assert bodies[1]["response_format"]["type"] == "json_schema"
