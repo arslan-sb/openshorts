@@ -58,3 +58,4 @@ campaigns/ledger.json
 campaign_out/
 # CUDA compute cache: the local compose sets HOME=/app (the repo)
 .nv/
+local/results/

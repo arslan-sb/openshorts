@@ -30,8 +30,21 @@ services:
       LOGNAME: clipper
       LLM_PROVIDER: openai
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
-      LLM_MODEL: ${LLM_MODEL:-qwen2.5:14b}
+      # Picked by local/bench_hooks.py on a real job (Nov 2026): the best
+      # hooks of the models that fit fully in 16 GB VRAM. gpt-oss:20b also
+      # fits but wrote headline-style hooks and clipped a sponsor read.
+      LLM_MODEL: ${LLM_MODEL:-gemma4:12b}
+      # Thinking off for scoring (many calls; with it Gemma took 25-48 s per
+      # call and sometimes answered empty), left on for the hook/title pass.
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-none}
+      LLM_DETAIL_REASONING_EFFORT: ${LLM_DETAIL_REASONING_EFFORT:-}
       LLM_TIMEOUT: ${LLM_TIMEOUT:-900}
+      # Scoring stays strict; hooks/titles/captions are written warmer.
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      LLM_DETAIL_TEMPERATURE: ${LLM_DETAIL_TEMPERATURE:-0.7}
+      # Keep finished jobs a week (self-host default is 24 h) so you can come
+      # back to them; `campaign.py prepare` copies what you post anyway.
+      JOB_RETENTION_SECONDS: ${JOB_RETENTION_SECONDS:-604800}
       # CPU transcription: "small" is a good speed/accuracy balance on 16 cores.
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
       WHISPER_DEVICE: cpu

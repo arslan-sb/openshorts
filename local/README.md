@@ -33,8 +33,28 @@ encoding) when the NVIDIA runtime is configured, otherwise it runs on CPU.
 Measured on an RTX 4060 Ti: a 15-minute podcast → 6 captioned clips in ~3.5 min.
 
 Open http://localhost:5175. The model is set in `docker-compose.local.yml`
-(`LLM_MODEL`, default `qwen2.5:14b`). Pull another one with
+(`LLM_MODEL`, default `gemma4:12b`). Pull another one with
 `OLLAMA_HOST=172.17.0.1:11434 ollama pull <model>`.
+
+### Choosing a model
+
+`local/bench_hooks.py` gives every model the same moments of a finished job
+and the pipeline's own hook/title prompt, and writes a side-by-side table to
+`local/results/`:
+
+```bash
+docker exec openshorts-backend python local/bench_hooks.py output/<job-id> gemma4:12b <other-model>
+```
+
+Tested on a 16 GB RTX 4060 Ti (Nov 2026): `qwen2.5:14b` copied the prompt's
+example hooks; `gpt-oss:20b` wrote headline-style hooks and clipped a sponsor
+read; `gemma4:26b-a4b` (88% in VRAM, ~3.5 min/call) and `qwen3.8:27b` (67% in
+VRAM, ~13 min/call) wrote well but are too slow here. `gemma4:12b` fits fully
+and wrote the most specific hooks.
+
+Sampling per pass: scoring runs at `LLM_TEMPERATURE=0.2` with
+`LLM_REASONING_EFFORT=none` (thinking off: 4-5 s per call instead of 25-48 s);
+the hook/title pass runs at `LLM_DETAIL_TEMPERATURE=0.7` with thinking on.
 
 Note: features that must look at video frames (automatic layout picker,
 on-screen content detection, silent videos) need Gemini and are skipped
